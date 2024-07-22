@@ -32,8 +32,8 @@ class GtfGeneClassGenerator:
             gene_pd_serie = self.merge_gene_group(group)
             GeneClass._creation_locked = False
             gene = GeneClass(gene_pd_serie)
-            GeneClass._creation_locked = True
             yield gene
+        GeneClass._creation_locked = True
 
     def merge_gene_group(self, gene_group):
         return self._merge_gene_group(gene_group)
@@ -41,8 +41,6 @@ class GtfGeneClassGenerator:
     def parse_genecode_gtf(self):
         return self._parse_genecode_gtf(self.gtf)
     
-
-
     @staticmethod
     def _parse_genecode_gtf(gtf_file, feature_level="transcript"):
         """
@@ -104,6 +102,7 @@ class GtfGeneClassGenerator:
             return rst_series
 
 class GeneClass:
+    _creation_locked = True
     def __init__(self, series):
         """        
         pandas Series, gene information with columns:
@@ -125,9 +124,11 @@ class GeneClass:
             raise ValueError("Cannot create instances of this class directly")
         return super().__new__(cls)
     
-    def __getattr__(self, item):
-        # Delegate attribute access to the underlying Series object
-        return getattr(self.series, item)
+    def __getattr__(self, attr):
+        if attr in {'__getstate__', '__setstate__'}:
+            return object.__getattr__(self, attr)
+        return getattr(self.series, attr)
+            
     
     def find_polyA_site(self, fasta_fn: str, inplace=True):
         """
@@ -265,12 +266,17 @@ def main():
 
     # Multi process
     else:
+        # release the lock for pickling in the multiprocessing
+        # i=0
+        # while i != None:
+        #     next(gene_iter, None)
+        # warning_msg("FINISH!", printit=True)
         for future in helper.multiprocessing_submit(
                             process_gene, 
                             gene_iter,
                             pbar=True,
-                            pbar_unit = "gene_group",
-                            preserve_order = False,
+                            pbar_unit = " gene_groups",
+                            pbar_func = lambda x: 1,
                             n_process=args.processes, 
                             bam_file_path=args.bam_file, 
                             fasta_file_path=args.genome_ref):
