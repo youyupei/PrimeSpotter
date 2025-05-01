@@ -176,56 +176,84 @@ class GeneClass:
         fasta_handle.close()
 def process_gene(gene: GeneClass , 
                     bam_file_path: str, 
-                    fasta_file_path: str,
-                    sam_tag: str = "IP") -> tuple:
+                    fasta_file_path: str) -> tuple:
 
+    """
+    Process the gene and return the offset of the reads in each category
+    Input:
+        - gene: GeneClass object
+        - bam_file_path: str, path to the bam file
+        - fasta_file_path: str, path to the fasta file
+    Output:
+        - int_prim_offsets: list of offsets for internal priming
+        - normal_prim_offsets: list of offsets for normal priming
+        - skipped_reads_offsets: list of offsets for skipped reads
+    Note:
+        The reason for output the offsets as list is that same read can reappear when processing
+        different genes, so we need to store the offsets for each gene separately and merge them later
+    """
     # adding filtered_polyA_internal_binding_sites
     gene.find_polyA_site(fasta_file_path, inplace=True)
-    
-    # Initialise the return variables
-    sam_buffer = ''
-    counter = Counter()
+
 
     # read the bam
     bam_file = pysam.AlignmentFile(bam_file_path, "rb")
+    iterator = bam_file.fetch(gene.Chromosome, gene.Start, gene.End)
+    int_prim_offsets = [] #store the position of the bam file for internal priming
+    normal_prim_offsets = [] #store the position of the bam file for normal priming
+    skipped_reads_offsets = [] #store the position of the bam file for skipped reads
+    while True:
+        try:
+            offset = bam_file.tell() # store the current position of the bam file
+            read = next(iterator)
+            int_prim_flag = False
+            if read.is_unmapped or read.is_supplementary:
+                skipped_reads_offsets.append(offset)
+                continue
 
-    for read in bam_file.fetch(gene.Chromosome, gene.Start, gene.End):
+            for start,end in gene.filtered_polyA_internal_binding_sites:
+                if gene.Strand=='-':
+                    if start <= read.reference_start <= end:
+                        int_prim_flag = True                
+                        break
+                    elif read.reference_start < start:
+                        break
+
+                elif gene.Strand=='+':
+                    if start <= read.reference_end <= end:
+                        int_prim_flag = True
+                        break
+                    elif end < read.reference_end:
+                        break
         
-        int_prim_flag = False
-        if read.is_unmapped or read.is_supplementary:
-            counter['skipped_reads'] += 1
-            continue
 
-        for start,end in gene.filtered_polyA_internal_binding_sites:
-            if gene.Strand=='-':
-                if start <= read.reference_start <= end:
-                    int_prim_flag = True
-                    
-                    break
-                elif read.reference_start < start:
-                    break
+            if int_prim_flag:
+                int_prim_offsets.append(offset) 
+            else:
+                normal_prim_offsets.append(offset)
 
-            elif gene.Strand=='+':
-                if start <= read.reference_end <= end:
-                    int_prim_flag = True
-                    counter['internal_priming'] += 1
-                    break
-                elif end < read.reference_end:
-                    break
-        
-
-        if int_prim_flag:
-            read.set_tag(sam_tag, 'Y', value_type='A')
-            counter['internal_priming'] += 1
-        else:
-            read.set_tag(sam_tag, 'N', value_type='A')
-            counter['normal_priming'] += 1
-
-        sam_buffer+= read.to_string() + '\n'
+    
+        except StopIteration:
+            break
     
     bam_file.close()
 
-    return sam_buffer, counter
+    return int_prim_offsets, normal_prim_offsets, skipped_reads_offsets
+
+def yield_read_from_offsets(bam_file_path: str, offsets: int):
+    """
+    Get the bam file from the offsets
+    """
+    bam_file = pysam.AlignmentFile(bam_file_path, "rb")
+    f = bam_file.fetch()
+    for idx, i in enumerate(sorted(offsets)):
+        bam_file.seek(i)
+        try:
+            read = next(f)
+        except StopIteration:
+            print(f"Warning: read not found at offset {i}")
+            continue
+        yield read
 
 def write_buffer(sam_buffer, output_file=""):
     """
@@ -238,32 +266,52 @@ def write_buffer(sam_buffer, output_file=""):
         except BrokenPipeError:
             sys.exit(0)
     else:
-        with open(output_file, 'w') as f:
+        with open(output_file, 'a') as f:
             f.write(sam_buffer)
 
 def main():
     args = parsers.parse_arg()
     bam_template = pysam.AlignmentFile(args.bam_file, "rb")
     bam_header = bam_template.text
+    # Warning message and exit if the output file already exists
+    if args.output_sam:
+        if helper.check_file(args.output_sam):
+            helper.warning_msg(f"Output file {args.output_sam} already exists. Please remove it or use a different name.", printit=True)
+            sys.exit(1)
+
     write_buffer(bam_header, args.output_sam)
 
     # Expect counts in the counter:
         # - internal_priming
         # - normal_priming
         # - skipped_reads
-    rst_counter = Counter()
+    # rst_counter = Counter()
 
     # Start
     gene_iter = GtfGeneClassGenerator(args.gtf_file)
-    # Single process
+    int_prim_offsets = []
+    normal_prim_offsets = []
+    skipped_reads_offsets = []
+    
+     # Single process
     if args.processes == 1:
         for gene in tqdm(gene_iter):
             
-            sam_buffer, counter = \
+            int_prim_offsets_gene, normal_prim_offsets_gene, skipped_reads_offsets_gene = \
                 process_gene(gene, args.bam_file, args.genome_ref)
-            write_buffer(sam_buffer)
-            rst_counter += counter
-
+            int_prim_offsets.extend(int_prim_offsets_gene)
+            normal_prim_offsets.extend(normal_prim_offsets_gene)
+            skipped_reads_offsets.extend(skipped_reads_offsets_gene)
+        # remove duplicates 
+        int_prim_offsets = set(int_prim_offsets)
+        normal_prim_offsets = set(normal_prim_offsets) - int_prim_offsets
+        skipped_reads_offsets = set(skipped_reads_offsets) - int_prim_offsets - normal_prim_offsets
+        
+        rst_counter = {
+            "internal_priming": len(int_prim_offsets),
+            "normal_priming": len(normal_prim_offsets),
+            "skipped_reads": len(skipped_reads_offsets)
+        }
     # Multi process
     else:
         # release the lock for pickling in the multiprocessing
@@ -281,12 +329,40 @@ def main():
                             bam_file_path=args.bam_file, 
                             fasta_file_path=args.genome_ref):
         
-            sam_buffer, counter = future.result()
-            write_buffer(sam_buffer)
-            rst_counter += counter
+            int_prim_offsets_gene, normal_prim_offsets_gene, skipped_reads_offsets_gene = \
+                future.result()
+            
+            int_prim_offsets.extend(int_prim_offsets_gene)
+            normal_prim_offsets.extend(normal_prim_offsets_gene)
+            skipped_reads_offsets.extend(skipped_reads_offsets_gene)
+            
+        # remove duplicates 
+        int_prim_offsets = set(int_prim_offsets)
+        normal_prim_offsets = set(normal_prim_offsets) - int_prim_offsets
+        skipped_reads_offsets = set(skipped_reads_offsets) - int_prim_offsets - normal_prim_offsets
+        
+        rst_counter = {
+            "internal_priming": len(int_prim_offsets),
+            "normal_priming": len(normal_prim_offsets),
+            "skipped_reads": len(skipped_reads_offsets)
+        }
+
     
-    # Finished
-    print("Finished")
+    print(rst_counter)
+    # Write the output sam file
+    # write the internal priming reads
+    for read in yield_read_from_offsets(args.bam_file, int_prim_offsets):
+        read.set_tag("IP", 'T', value_type='A')
+        write_buffer(read.to_string() + '\n')
+    # write the normal priming reads
+    for read in yield_read_from_offsets(args.bam_file, normal_prim_offsets):
+        read.set_tag("IP", 'F', value_type='A')
+        write_buffer(read.to_string() + '\n')
+    # write the skipped reads
+    for read in yield_read_from_offsets(args.bam_file, skipped_reads_offsets):
+        read.set_tag("IP", 'N', value_type='A')
+        write_buffer(read.to_string() + '\n')
+
 
 
     with open(args.output_summary, 'w') as f:
@@ -297,6 +373,8 @@ def main():
             f"Proportion of internal priming reads: {rst_counter['internal_priming']/(rst_counter['internal_priming']+rst_counter['normal_priming'])}\n"
         )
         
+    # Finished
+    print("Finished")
 if __name__ == "__main__":
     # redirect the print function to the stderror
     stdout = sys.stdout
