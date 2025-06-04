@@ -143,7 +143,7 @@ class GeneClass:
 
     @staticmethod
     def _find_all_polyA_site(gene, fasta_fn: str, window_size=10, 
-                    minAorT=8, merge_dist=3, flank_butter=25) -> None:
+                    minAorT=8, merge_dist=2, flank_buffer=10) -> None:
         """
         find the polyA site for the gene
         return a list of tuple, each tuple is the start and end of the polyA site
@@ -161,10 +161,10 @@ class GeneClass:
         # find location of consecutive window sum >= minAT
         polyA_site = np.where(window_sum >= minAorT)[0]
         if len(polyA_site):
-            # merge consecutive polyA when the difference is <=3
+            # merge consecutive polyA when the location difference is <= merge_dist
             polyA_site = np.split(polyA_site, np.where(np.diff(polyA_site) > merge_dist)[0]+1)
             polyA_site = \
-                [(gene.Start+x[0]-flank_butter, gene.Start+x[-1]+window_size+flank_butter) for x in polyA_site]
+                [(gene.Start+x[0]-flank_buffer, gene.Start+x[-1]+window_size+flank_buffer) for x in polyA_site]
             
             if gene.Strand == "+":
                 polyA_site = polyA_site[::-1]
