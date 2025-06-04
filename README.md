@@ -10,11 +10,13 @@ This tool identifies such artifacts by scanning the genome for A-rich regions an
 
 ## Algorithm Overview
 
-### Step 1: Detect A-Enriched Genomic Regions (Both Strands)
+![Workflow Diagram](PrimSpotter.svg)
+
+### Step 1: Detect A-Enriched Genomic Regions
 
 1.1. **Sliding Window Search**  
 Scan the genome using a sliding window of size 10 nucleotides.  
-Select windows that contain **≥ 8 As** (on the plus strand) or **≥ 8 Ts** (on the minus strand).
+Select windows that contain **≥ 8 As** (on the forward strand) or **≥ 8 Ts** (on the reverse strand), depending on which strand the genes came from.
 
 1.2. **Merge Overlapping Windows**  
 Merge overlapping or adjacent enriched windows into larger contiguous regions.
@@ -33,9 +35,12 @@ Label a read as an **internally primed read** if:
 
 To be added: script usage examples, input format, and dependencies.
 
-## Visualization
+## Output:
+1. Sorted bam file with the internally primed reads flagged as `T` as the IP tag, otherwise `F`
+2. A summary txt file report the number and proportion of internally primed reads.
 
-![Workflow Diagram](PrimSpotter.svg)
+## Example result:
+![Example screenshot](Example.png)
 
 ## License
 
