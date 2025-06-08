@@ -97,8 +97,13 @@ class GtfGeneClassGenerator:
             # add a new column to store the number of transcripts (concatenate the numbers separated by ",")
             if strand == "+":
                 rst_series["TSS"] = [x for x in gene_group[gene_group.Feature == "transcript"].Start]
-            else:
+                rst_series["TTS"] = [x for x in gene_group[gene_group.Feature == "transcript"].End]
+            elif strand == "-":
                 rst_series["TSS"] = [x for x in gene_group[gene_group.Feature == "transcript"].End]
+                rst_series["TTS"] = [x for x in gene_group[gene_group.Feature == "transcript"].Start]
+            else:
+                raise ValueError(f"Invalid strand {strand} for gene {rst_series.Gene_id}")
+
             return rst_series
 
 class GeneClass:
@@ -110,10 +115,14 @@ class GeneClass:
             - Start
             - End
             - Strand
+            - Gene_id
+            - TSS (list of transcript start sites)
+            - TTS (list of transcript termination sites)
         """
         if not isinstance(series, pd.Series):
             raise ValueError("Expected a pandas Series object")
         self.series = series
+        self.polyA_internal_binding_sites = None
         self.filtered_polyA_internal_binding_sites = None
 
     def __new__(cls, *args, **kwargs):
@@ -132,12 +141,13 @@ class GeneClass:
     
     def find_polyA_site(self, fasta_fn: str, inplace=True):
         """
-        New attribute: filtered_polyA_internal_binding_sites will be added
+        Find the polyA site for the gene and store it in the filtered_polyA_internal_binding_sites attribute.
         """
         all_polyA_site = self._find_all_polyA_site(self, fasta_fn)
         if inplace:
+            self.polyA_internal_binding_sites = all_polyA_site
             self.filtered_polyA_internal_binding_sites = \
-                [x for x in all_polyA_site if not any([x[0]<y<x[1] for y in self.TSS])]
+                [x for x in all_polyA_site if not any([x[0]<y<x[1] for y in self.TTS])]
         else:
             raise NotImplementedError("Not implemented yet")
 
@@ -161,11 +171,13 @@ class GeneClass:
         # find location of consecutive window sum >= minAT
         polyA_site = np.where(window_sum >= minAorT)[0]
         if len(polyA_site):
-            # merge consecutive polyA when the location difference is <= merge_dist
-            polyA_site = np.split(polyA_site, np.where(np.diff(polyA_site) > merge_dist)[0]+1)
+            # merge polyA windows with a when the gap between windows is <= merge_dist
+            # note that polyA_site is the index of the start of the window so the correct calculation of the gap: site distance - window_size 
+            polyA_site = np.split(polyA_site, np.where(np.diff(polyA_site) - window_size> merge_dist)[0]+1)
             polyA_site = \
                 [(gene.Start+x[0]-flank_buffer, gene.Start+x[-1]+window_size+flank_buffer) for x in polyA_site]
             
+            # forgot why I reversed the polyA_site for + strand, but it does not matter
             if gene.Strand == "+":
                 polyA_site = polyA_site[::-1]
 
@@ -192,9 +204,10 @@ def process_gene(gene: GeneClass ,
         The reason for output the offsets as list is that same read can reappear when processing
         different genes, so we need to store the offsets for each gene separately and merge them later
     """
-    # adding filtered_polyA_internal_binding_sites
+    # adding filtered_polyA_internal_binding_sites and polyA_internal_binding_sites
     gene.find_polyA_site(fasta_file_path, inplace=True)
-
+    n_site_filtered = len(gene.filtered_polyA_internal_binding_sites)
+    n_site_unfiltered = len(gene.polyA_internal_binding_sites)
 
     # read the bam
     bam_file = pysam.AlignmentFile(bam_file_path, "rb")
@@ -238,7 +251,17 @@ def process_gene(gene: GeneClass ,
     
     bam_file.close()
 
-    return int_prim_offsets, normal_prim_offsets, skipped_reads_offsets
+    # GET read counts as the pd.series
+    rst_series = pd.Series({
+        "Gene_id": gene.Gene_id,
+        "IP_count": len(int_prim_offsets),
+        "nonIP_count": len(normal_prim_offsets),
+        "Skipped_reads": len(skipped_reads_offsets),
+        "n_site_filtered": n_site_filtered,
+        "n_site_unfiltered": n_site_unfiltered
+    })
+
+    return int_prim_offsets, normal_prim_offsets, skipped_reads_offsets, rst_series
 
 def yield_read_from_offsets(bam_file_path: str, offsets: int):
     """
@@ -292,16 +315,18 @@ def main():
     int_prim_offsets = []
     normal_prim_offsets = []
     skipped_reads_offsets = []
+    gene_level_summary = []
     
      # Single process
     if args.processes == 1:
         for gene in tqdm(gene_iter):
             
-            int_prim_offsets_gene, normal_prim_offsets_gene, skipped_reads_offsets_gene = \
+            int_prim_offsets_gene, normal_prim_offsets_gene, skipped_reads_offsets_gene, rst_series = \
                 process_gene(gene, args.bam_file, args.genome_ref)
             int_prim_offsets.extend(int_prim_offsets_gene)
             normal_prim_offsets.extend(normal_prim_offsets_gene)
             skipped_reads_offsets.extend(skipped_reads_offsets_gene)
+            gene_level_summary.append(rst_series)
         # remove duplicates 
         int_prim_offsets = set(int_prim_offsets)
         normal_prim_offsets = set(normal_prim_offsets) - int_prim_offsets
@@ -329,12 +354,13 @@ def main():
                             bam_file_path=args.bam_file, 
                             fasta_file_path=args.genome_ref):
         
-            int_prim_offsets_gene, normal_prim_offsets_gene, skipped_reads_offsets_gene = \
+            int_prim_offsets_gene, normal_prim_offsets_gene, skipped_reads_offsets_gene,  rst_series= \
                 future.result()
             
             int_prim_offsets.extend(int_prim_offsets_gene)
             normal_prim_offsets.extend(normal_prim_offsets_gene)
             skipped_reads_offsets.extend(skipped_reads_offsets_gene)
+            gene_level_summary.append(rst_series)
             
         # remove duplicates 
         int_prim_offsets = set(int_prim_offsets)
@@ -364,7 +390,7 @@ def main():
         write_buffer(read.to_string() + '\n')
 
 
-
+    # output the global summary
     with open(args.output_summary, 'w') as f:
         f.write(
             f"Total number of reads (mapped): {rst_counter['internal_priming'] + rst_counter['normal_priming']}\n"
@@ -373,6 +399,12 @@ def main():
             f"Proportion of internal priming reads: {rst_counter['internal_priming']/(rst_counter['internal_priming']+rst_counter['normal_priming'])}\n"
         )
         
+    
+    # output the gene level count
+    gene_level_summary_df = pd.DataFrame(gene_level_summary)
+    gene_level_summary_df.to_csv(args.output_gene_count, sep="\t", index=False)
+
+
     # Finished
     print("Finished")
 if __name__ == "__main__":

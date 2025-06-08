@@ -20,6 +20,7 @@ def parse_arg():
     # add a output file prefix
     parser.add_argument('--output-sam', type=str, default="", help='Output filename, the output sam file will be write to the stdout if not specified')
     parser.add_argument('--output-summary', type=str, default="internal_priming_summary.txt", help='Output summary file')
+    parser.add_argument('--output-gene-count', type=str, default="internal_priming_gene_count.tsv", help='Count of internal priming sites and reads per gene')
     parser.add_argument('--sam-tag', type=ParserChecker.sam_tag, default="IP", help='SAM tag for the whether it is an internal priming site read')
 
     args = parser.parse_args()
