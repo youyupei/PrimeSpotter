@@ -1,6 +1,6 @@
 # PrimSpotter: Detecting Internal Priming Artifacts in RNA-seq Data
 
-PrimSpotter is a tool to identify and characterize internal priming artifacts in RNA-seq data, especially those caused by A-rich genomic regions that lead to spurious priming events.
+PrimSpotter is a tool to identify and characterise internal priming artifacts in RNA-seq data, especially those caused by A-rich genomic regions that lead to spurious priming events.
 
 ## Purpose
 
@@ -34,6 +34,29 @@ Label a read as an **internally primed read** if:
 - It **ends** within an A-rich region, or  
 - It **starts** within a T-rich region
 
+
+## Install
+The script can be run directly after cloning the repository.
+Dependencies can be installed manually or automatically using the provided Conda environment file, which should take <5 mins to set up.
+```
+git clone https://github.com/youyupei/PrimeSpotter.git
+conda env create -f env.yaml
+conda activate 
+```
+
+### Dependencies (tested versions)
+- Python 3.7.12  
+- pandas 1.3.5  
+- pysam 0.16.0  
+- numpy 1.21.6  
+- tqdm 4.67.1  
+- matplotlib 3.5.3  
+- scipy 1.7.3  
+- samtools 1.22.1
+
+## Supported OS: 
+Linux and macOS. Windows users can use WSL. Tested on Red Hat Enterprise Linux 9.3.
+
 ## Usage
 
 ```
@@ -47,7 +70,7 @@ python3 PrimSpotter/PrimeSpotter.py --bam_file {input bam} \
 
 ## Output:
 1. Sorted bam file with the internally primed reads flagged as `T` as the IP tag, otherwise `F`
-2. A summary txt file report the number and proportion of internally primed reads.
+2. A summary txt file reports the number and proportion of internally primed reads.
 3. A table counting the number of internally primed (IP) reads versus non-IP reads. The table contains the following columns:
  - Gene_id : Gene id
  - IP_count: count of IP reads
@@ -57,6 +80,17 @@ python3 PrimSpotter/PrimeSpotter.py --bam_file {input bam} \
  - n_site_unfiltered: Number of A-rich regions detected for the gene (**without** filtering for annotated transcript termination sites)
 ## Example result:
 ![Example screenshot](Example.png)
+
+## Demo
+
+Example data and demonstration code are provided in the `test/` directory.
+Users can run the following command to test the workflow:
+
+```
+cd test && bash test.sh
+```
+
+The expected output can be found in `test/expect_output`. Running the demo data should complete within a few seconds.
 
 ## License
 
