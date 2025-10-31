@@ -1,0 +1,4 @@
+Total number of reads (mapped): 389
+Internally primed reads: 135
+Normally primed reads: 254
+Proportion of internal priming reads: 0.34704370179948585

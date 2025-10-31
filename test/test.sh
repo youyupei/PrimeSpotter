@@ -1,7 +1,7 @@
-module load samtools
-
 mkdir -p test_output
 
+# gunzip but preserve original files
+gunzip -k chr2.fasta.gz
 python3 ../PrimeSpotter/PrimeSpotter.py --bam_file SF3B1.bam \
                                         --gtf_file SF3B1.gtf \
                                         --output-summary test_output/test_summary.txt \
