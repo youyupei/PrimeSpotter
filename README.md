@@ -22,7 +22,7 @@ Select windows that contain **≥ 8 As** (on the forward strand) or **≥ 8 Ts**
 Merge overlapping or adjacent enriched windows into larger contiguous regions.
 
 1.3. **Region Extension**  
-Extend each merged region by **25 nucleotides** upstream and downstream to accommodate read alignment variability.
+Extend each merged region by **10 nucleotides** upstream and downstream to accommodate read alignment variability.
 
 1.4 **A-rich region filtering**
 Filter out A-rich regions that overlap the annotated transcript termination sites.
