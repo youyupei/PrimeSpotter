@@ -7,13 +7,12 @@ import helper
 # arg parser
 def parse_arg():
     parser = argparse.ArgumentParser(
-    description=textwrap.dedent(helper.bold_text(
-    '''PrimeSpotter is a program for analysing and investigating the internel priming issue with long-read sequencing\n
-    ''')),
-    formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+        description=textwrap.dedent(helper.bold_text(
+        '''PrimeSpotter: analyse and investigate internal priming in long-read sequencing.\n
+        ''')),
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     
-    parser = argparse.ArgumentParser(description='BAM file and GTF/GFF file parser')
-    parser.add_argument('--bam_file', type=ParserChecker.input_fn, help='Path to the BAM file',required=True)
+    parser.add_argument('--bam_file', type=ParserChecker.input_fn, help='Path to the BAM file', required=True)
     parser.add_argument('--gtf_file', type=ParserChecker.input_fn, help='Path to the GTF/GFF file', required=True)
     parser.add_argument('--genome-ref', type=ParserChecker.input_fn, help='Path to the FASTA file for genome reference',required=True)
     parser.add_argument('--processes', type=ParserChecker.processes, default=1, help='Number of processes to use')
@@ -22,6 +21,16 @@ def parse_arg():
     parser.add_argument('--output-summary', type=str, default="internal_priming_summary.txt", help='Output summary file')
     parser.add_argument('--output-gene-count', type=str, default="internal_priming_gene_count.tsv", help='Count of internal priming sites and reads per gene')
     parser.add_argument('--sam-tag', type=ParserChecker.sam_tag, default="IP", help='SAM tag for the whether it is an internal priming site read')
+    parser.add_argument('--flank-buffer', type=int, default=10,
+                        help='Number of bases to expand each detected poly-A site on both sides. '
+                             'Larger values make the classifier more permissive (more reads flagged as IP). '
+                             'Reduce to 2-5 if IP site locations look too broad in IGV.')
+    parser.add_argument('--gene-list', type=ParserChecker.input_fn, default=None,
+                        help='Optional path to a plain text file with one gene per line. '
+                             'Accepts gene names (e.g. TTN, KCNQ1OT1) or Ensembl gene IDs '
+                             '(e.g. ENSG00000155657), or a mix of both. '
+                             'ENST transcript IDs are NOT supported — use gene names or ENSG IDs. '
+                             'When provided, only these genes will be analysed.')
 
     args = parser.parse_args()
     return args
