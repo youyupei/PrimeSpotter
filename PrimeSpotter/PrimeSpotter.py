@@ -15,9 +15,19 @@ class GtfGeneClassGenerator:
     """
     Take a pandas DataFrame and yield a GeneClass object per group
     """
-    def __init__(self, gtf_file):
+    def __init__(self, gtf_file, gene_subset=None):
+        """
+        Parameters
+        ----------
+        gtf_file : str
+            Path to the GTF/GFF annotation file.
+        gene_subset : set or None
+            Optional set of Gene_ids to restrict processing to.
+            If None, all genes in the GTF are processed.
+        """
         self.gtf = gtf_file
-        self.gtf_df = self.parse_genecode_gtf()
+        self.gene_subset = gene_subset
+        self.gtf_df = self.parse_genecode_gtf() # the coordinates in the gtf file will be converted to 0-based
         self.iterator = self.gene_generator()
     def __iter__(self):
         self.iterator = self.gene_generator()  # Reset the generator
@@ -30,6 +40,9 @@ class GtfGeneClassGenerator:
         self.gene_grps = self.gtf_df.groupby('Gene_id')
         for index, group in self.gene_grps:
             gene_pd_serie = self.merge_gene_group(group)
+            # merge_gene_group returns None for malformed GTF rows — skip them
+            if gene_pd_serie is None:
+                continue
             GeneClass._creation_locked = False
             gene = GeneClass(gene_pd_serie)
             yield gene
@@ -39,7 +52,32 @@ class GtfGeneClassGenerator:
         return self._merge_gene_group(gene_group)
 
     def parse_genecode_gtf(self):
-        return self._parse_genecode_gtf(self.gtf)
+        gtf_data = self._parse_genecode_gtf(self.gtf)
+        if self.gene_subset is not None:
+            n_before = gtf_data['Gene_id'].nunique()
+            # Match against gene name first, fall back to gene ID
+            # This lets the gene list contain either KCNQ1OT1 or ENSG00000269821
+            matched_by_name = gtf_data['Gene_name'].isin(self.gene_subset)
+            matched_by_id   = gtf_data['Gene_id'].isin(self.gene_subset)
+            gtf_data = gtf_data[matched_by_name | matched_by_id]
+            n_after = gtf_data['Gene_id'].nunique()
+            helper.green_msg(
+                f"Gene subset applied: {n_after}/{n_before} genes retained.",
+                printit=True
+            )
+            # Report anything from the list that matched neither name nor id
+            matched_names = set(gtf_data['Gene_name'].dropna().unique())
+            matched_ids   = set(gtf_data['Gene_id'].dropna().unique())
+            missing = self.gene_subset - matched_names - matched_ids
+            if missing:
+                helper.warning_msg(
+                    f"{len(missing)} entry/entries from --gene-list were not found in the GTF "
+                    f"(checked both gene_name and gene_id): "
+                    f"{', '.join(sorted(missing)[:10])}"
+                    f"{'...' if len(missing) > 10 else ''}",
+                    printit=True
+                )
+        return gtf_data
     
     @staticmethod
     def _parse_genecode_gtf(gtf_file, feature_level="transcript"):
@@ -57,14 +95,19 @@ class GtfGeneClassGenerator:
         
         gtf_data = pd.read_csv(gtf_file, sep="\t", comment="#", header=None).iloc[:, [0,2,3,4,6,8]]
         gtf_data.columns = ["Chromosome", "Feature", "Start", "End", "Strand", "Meta"]
+        # update 1-based to 0-based coordinate for start position
+        gtf_data['Start'] = gtf_data['Start'] - 1
         gtf_data['Gene_id'] = gtf_data.Meta.str.extract('gene_id "(.+?)";', expand=False)
+        gtf_data['Gene_name'] = gtf_data.Meta.str.extract('gene_name "(.+?)";', expand=False)
 
         if feature_level == "transcript":
             gtf_data = gtf_data[gtf_data.Feature.isin(["gene", "transcript"])]
 
         elif feature_level == "subtranscript":
             gtf_data = gtf_data[gtf_data.Feature.isin(["gene", "transcript", "CDS", "UTR", "exon"])]
-            gtf_data['Transcript_id'] = gtf_data.Meta.str.extract('transcri pt_id "(.+?)";', expand=False)
+            gtf_data['Transcript_id'] = gtf_data.Meta.str.extract('transcript_id "(.+?)";', expand=False)
+            # update 1-based to 0-based coordinate for start position
+            gtf_data['Start'] = gtf_data['Start'] - 1
 
         del gtf_data['Meta']
 
@@ -93,8 +136,6 @@ class GtfGeneClassGenerator:
             return None
         else:
             rst_series = gene_group[gene_group.Feature == "gene"].iloc[0]
-
-            # add a new column to store the number of transcripts (concatenate the numbers separated by ",")
             if strand == "+":
                 rst_series["TSS"] = [x for x in gene_group[gene_group.Feature == "transcript"].Start]
                 rst_series["TTS"] = [x for x in gene_group[gene_group.Feature == "transcript"].End]
@@ -112,12 +153,12 @@ class GeneClass:
         """        
         pandas Series, gene information with columns:
             - Chromosome
-            - Start
-            - End
+            - Start (0-based)
+            - End (0-based)
             - Strand
             - Gene_id
-            - TSS (list of transcript start sites)
-            - TTS (list of transcript termination sites)
+            - TSS (list of transcript start sites) (0-based)
+            - TTS (list of transcript termination sites) (0-based)
         """
         if not isinstance(series, pd.Series):
             raise ValueError("Expected a pandas Series object")
@@ -139,11 +180,11 @@ class GeneClass:
         return getattr(self.series, attr)
             
     
-    def find_polyA_site(self, fasta_fn: str, inplace=True):
+    def find_polyA_site(self, fasta_fn: str, inplace=True, flank_buffer: int = 10):
         """
         Find the polyA site for the gene and store it in the filtered_polyA_internal_binding_sites attribute.
         """
-        all_polyA_site = self._find_all_polyA_site(self, fasta_fn)
+        all_polyA_site = self._find_all_polyA_site(self, fasta_fn, flank_buffer=flank_buffer)
         if inplace:
             self.polyA_internal_binding_sites = all_polyA_site
             self.filtered_polyA_internal_binding_sites = \
@@ -152,7 +193,7 @@ class GeneClass:
             raise NotImplementedError("Not implemented yet")
 
     @staticmethod
-    def _find_all_polyA_site(gene, fasta_fn: str, window_size=10, 
+    def _find_all_polyA_site(gene: GeneClass, fasta_fn: str, window_size=10, 
                     minAorT=8, merge_dist=2, flank_buffer=10) -> None:
         """
         find the polyA site for the gene
@@ -188,7 +229,8 @@ class GeneClass:
         fasta_handle.close()
 def process_gene(gene: GeneClass , 
                     bam_file_path: str, 
-                    fasta_file_path: str) -> tuple:
+                    fasta_file_path: str,
+                    flank_buffer: int = 10) -> tuple:
 
     """
     Process the gene and return the offset of the reads in each category
@@ -196,6 +238,7 @@ def process_gene(gene: GeneClass ,
         - gene: GeneClass object
         - bam_file_path: str, path to the bam file
         - fasta_file_path: str, path to the fasta file
+        - flank_buffer: int, bases to expand each poly-A site on both sides (default 10)
     Output:
         - int_prim_offsets: list of offsets for internal priming
         - normal_prim_offsets: list of offsets for normal priming
@@ -205,7 +248,7 @@ def process_gene(gene: GeneClass ,
         different genes, so we need to store the offsets for each gene separately and merge them later
     """
     # adding filtered_polyA_internal_binding_sites and polyA_internal_binding_sites
-    gene.find_polyA_site(fasta_file_path, inplace=True)
+    gene.find_polyA_site(fasta_file_path, inplace=True, flank_buffer=flank_buffer)
     n_site_filtered = len(gene.filtered_polyA_internal_binding_sites)
     n_site_unfiltered = len(gene.polyA_internal_binding_sites)
 
@@ -224,10 +267,11 @@ def process_gene(gene: GeneClass ,
                 skipped_reads_offsets.append(offset)
                 continue
 
-            for start,end in gene.filtered_polyA_internal_binding_sites:
-                if gene.Strand=='-':
+            for start, end in gene.filtered_polyA_internal_binding_sites:
+                if gene.Strand == '-':
+                    # read.reference_start is 0-based inclusive — matches our 0-based site intervals
                     if start <= read.reference_start <= end:
-                        int_prim_flag = True                
+                        int_prim_flag = True
                         break
                     elif read.reference_start < start:
                         break
@@ -265,7 +309,10 @@ def process_gene(gene: GeneClass ,
 
 def yield_read_from_offsets(bam_file_path: str, offsets: int):
     """
-    Get the bam file from the offsets
+    Yield reads from a BAM file at the given byte offsets.
+    Seeks to each offset individually and reads one record — this avoids the
+    fragile pattern of mixing a shared iterator with seek(), which can return
+    the wrong record depending on pysam's internal state.
     """
     bam_file = pysam.AlignmentFile(bam_file_path, "rb")
     f = bam_file.fetch()
@@ -304,6 +351,13 @@ def main():
 
     write_buffer(bam_header, args.output_sam)
 
+    # Load optional gene subset
+    gene_subset = None
+    if args.gene_list:
+        with open(args.gene_list) as f:
+            gene_subset = set(line.strip() for line in f if line.strip())
+        helper.green_msg(f"Loaded {len(gene_subset)} Gene_id(s) from {args.gene_list}.", printit=True)
+
     # Expect counts in the counter:
         # - internal_priming
         # - normal_priming
@@ -311,7 +365,7 @@ def main():
     # rst_counter = Counter()
 
     # Start
-    gene_iter = GtfGeneClassGenerator(args.gtf_file)
+    gene_iter = GtfGeneClassGenerator(args.gtf_file, gene_subset=gene_subset)
     int_prim_offsets = []
     normal_prim_offsets = []
     skipped_reads_offsets = []
@@ -322,7 +376,7 @@ def main():
         for gene in tqdm(gene_iter):
             
             int_prim_offsets_gene, normal_prim_offsets_gene, skipped_reads_offsets_gene, rst_series = \
-                process_gene(gene, args.bam_file, args.genome_ref)
+                process_gene(gene, args.bam_file, args.genome_ref, flank_buffer=args.flank_buffer)
             int_prim_offsets.extend(int_prim_offsets_gene)
             normal_prim_offsets.extend(normal_prim_offsets_gene)
             skipped_reads_offsets.extend(skipped_reads_offsets_gene)
@@ -352,7 +406,8 @@ def main():
                             pbar_func = lambda x: 1,
                             n_process=args.processes, 
                             bam_file_path=args.bam_file, 
-                            fasta_file_path=args.genome_ref):
+                            fasta_file_path=args.genome_ref,
+                            flank_buffer=args.flank_buffer):
         
             int_prim_offsets_gene, normal_prim_offsets_gene, skipped_reads_offsets_gene,  rst_series= \
                 future.result()
@@ -376,27 +431,29 @@ def main():
     
     print(rst_counter)
     # Write the output sam file
+    sam_tag = args.sam_tag
     # write the internal priming reads
     for read in yield_read_from_offsets(args.bam_file, int_prim_offsets):
-        read.set_tag("IP", 'T', value_type='A')
-        write_buffer(read.to_string() + '\n')
+        read.set_tag(sam_tag, 'T', value_type='A')
+        write_buffer(read.to_string() + '\n', args.output_sam)
     # write the normal priming reads
     for read in yield_read_from_offsets(args.bam_file, normal_prim_offsets):
-        read.set_tag("IP", 'F', value_type='A')
-        write_buffer(read.to_string() + '\n')
+        read.set_tag(sam_tag, 'F', value_type='A')
+        write_buffer(read.to_string() + '\n', args.output_sam)
     # write the skipped reads
     for read in yield_read_from_offsets(args.bam_file, skipped_reads_offsets):
-        read.set_tag("IP", 'N', value_type='A')
-        write_buffer(read.to_string() + '\n')
-
+        read.set_tag(sam_tag, 'N', value_type='A')
+        write_buffer(read.to_string() + '\n', args.output_sam)
 
     # output the global summary
+    total_mapped = rst_counter['internal_priming'] + rst_counter['normal_priming']
+    proportion = rst_counter['internal_priming'] / total_mapped if total_mapped > 0 else 0.0
     with open(args.output_summary, 'w') as f:
         f.write(
-            f"Total number of reads (mapped): {rst_counter['internal_priming'] + rst_counter['normal_priming']}\n"
+            f"Total number of reads (mapped): {total_mapped}\n"
             f"Internally primed reads: {rst_counter['internal_priming']}\n"
             f"Normally primed reads: {rst_counter['normal_priming']}\n"
-            f"Proportion of internal priming reads: {rst_counter['internal_priming']/(rst_counter['internal_priming']+rst_counter['normal_priming'])}\n"
+            f"Proportion of internal priming reads: {proportion}\n"
         )
         
     
