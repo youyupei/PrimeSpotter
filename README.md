@@ -1,6 +1,6 @@
 # PrimeSpotter: Detecting Internal Priming Artifacts in RNA-seq Data
 
-PrimSpotter is a tool to identify and characterise internal priming artifacts in RNA-seq data, especially those caused by A-rich genomic regions that lead to spurious priming events.
+PrimeSpotter is a tool to identify and characterise internal priming artifacts in RNA-seq data, especially those caused by A-rich genomic regions that lead to spurious priming events.
 
 ## Purpose
 
@@ -60,7 +60,7 @@ Linux and macOS. Windows users can use WSL. Tested on Red Hat Enterprise Linux 9
 ## Usage
 
 ```
-python3 PrimSpotter/PrimeSpotter.py --bam_file {input bam} \
+python3 PrimeSpotter/PrimeSpotter.py --bam_file {input bam} \
                                 --genome-ref {input genome} \
                                 --gtf_file {input gtf} \
                                 --output-summary {output summary filename} \
