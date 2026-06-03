@@ -1,4 +1,4 @@
-# PrimSpotter: Detecting Internal Priming Artifacts in RNA-seq Data
+# PrimeSpotter: Detecting Internal Priming Artifacts in RNA-seq Data
 
 PrimSpotter is a tool to identify and characterise internal priming artifacts in RNA-seq data, especially those caused by A-rich genomic regions that lead to spurious priming events.
 
